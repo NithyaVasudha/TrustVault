@@ -1,3 +1,4 @@
+
 FROM node:22-alpine AS frontend-build
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -27,5 +28,6 @@ EXPOSE 10000
 COPY --from=backend-build --chown=$APP_UID:$APP_UID /out/api/ ./
 COPY --from=backend-build --chown=$APP_UID:$APP_UID /out/migrator/ ./migrator/
 COPY --from=frontend-build --chown=$APP_UID:$APP_UID /src/frontend/dist/trustvault-web/browser/ ./wwwroot/
+RUN mkdir -p /app/App_Data && chown -R $APP_UID:$APP_UID /app/App_Data
 USER $APP_UID
 ENTRYPOINT ["dotnet", "TrustVault.Api.dll"]
