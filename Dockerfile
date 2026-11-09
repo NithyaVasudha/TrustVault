@@ -23,6 +23,7 @@ RUN dotnet publish backend/TrustVault.Migrator/TrustVault.Migrator.csproj --conf
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
+RUN apk add --no-cache krb5-libs
 ENV ASPNETCORE_HTTP_PORTS=10000
 EXPOSE 10000
 COPY --from=backend-build --chown=$APP_UID:$APP_UID /out/api/ ./
@@ -30,4 +31,4 @@ COPY --from=backend-build --chown=$APP_UID:$APP_UID /out/migrator/ ./migrator/
 COPY --from=frontend-build --chown=$APP_UID:$APP_UID /src/frontend/dist/trustvault-web/browser/ ./wwwroot/
 RUN mkdir -p /app/App_Data && chown -R $APP_UID:$APP_UID /app/App_Data
 USER $APP_UID
-ENTRYPOINT ["dotnet", "TrustVault.Api.dll"]
+ENTRYPOINT ["sh", "-c", "export ConnectionStrings__TrustVaultMigrator=\"$ConnectionStrings__TrustVault\" && dotnet /app/migrator/TrustVault.Migrator.dll && exec dotnet /app/TrustVault.Api.dll"]
