@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: trustvault
+          POSTGRES_USER: trustvault_app
+          POSTGRES_PASSWORD: local_only
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U trustvault_app -d trustvault"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      Jwt__SigningKey: ci-only-signing-key-not-used-for-deployment-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore TrustVault.sln
+      - run: dotnet tool restore
+      - run: dotnet format TrustVault.sln --verify-no-changes --no-restore
+      - run: dotnet build TrustVault.sln --no-restore --configuration Release
+      - name: Provision restricted database roles
+        run: docker exec -i "$POSTGRES_CONTAINER_ID" psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 < database/setup-roles.sql
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+      - name: Apply database migrations
+        run: dotnet run --project backend/TrustVault.Migrator --configuration Release
+        env:
+          ConnectionStrings__TrustVaultMigrator: Host=localhost;Port=55432;Database=trustvault;Username=trustvault_migrator;Password=migrator_local
+      - name: Enforce append-only audit privileges
+        run: docker exec -i "$POSTGRES_CONTAINER_ID" psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 < database/setup-roles.sql
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+      - run: dotnet test TrustVault.sln --no-build --configuration Release
+        env:
+          ConnectionStrings__TrustVault: Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local
+      - name: Check EF model and migrations
+        run: dotnet tool run dotnet-ef migrations has-pending-model-changes --project backend/TrustVault.Infrastructure --startup-project backend/TrustVault.Api
+        env:
+          ConnectionStrings__TrustVaultMigrator: Host=localhost;Port=55432;Database=trustvault;Username=trustvault_migrator;Password=migrator_local
+          ConnectionStrings__TrustVault: Host=localhost;Database=trustvault;Username=ci;Password=ci-only
+          Jwt__SigningKey: ci-only-signing-key-not-used-for-deployment-32-bytes
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm test -- --watch=false --browsers=ChromeHeadless
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm audit --omit=dev
+        working-directory: frontend
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag trustvault:ci .
